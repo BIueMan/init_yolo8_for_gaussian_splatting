@@ -48,6 +48,7 @@ cap = cv2.VideoCapture(video_path)
 mask_list = []
 images_list = []
 save_mask_list = []
+box_list = []
 
 selected_object_idx = 0
 frame_idx = -1
@@ -56,7 +57,9 @@ while cap.isOpened():
     campter_frame = ((frame_idx)%int(fps) == 0)
     ret, frame = cap.read()
     if not ret:
+        frame = frame_minus1
         break
+    frame_minus1 = frame
 
     # Run YOLOv8 inference on the frame
     results = model.track(frame, persist=True)
@@ -69,6 +72,14 @@ while cap.isOpened():
     object_name_idx = int(results[0].boxes.cls[selected_object_idx].numpy())
     object_name = class_names[object_name_idx]    
     
+    # save blox
+    box = results[0].boxes[selected_object_idx]
+    x_min, y_min, x_max, y_max = box.xyxy[0].cpu().numpy()
+    x = int(x_min)
+    y = int(y_min)
+    w = int(x_max - x_min)
+    h = int(y_max - y_min)
+    
     # Visualize
     mask_reshape = cv2.resize(wanted_mask_color, [frame_.shape[1], frame_.shape[0]])
     combined_image = cv2.hconcat([frame_, mask_reshape])
@@ -80,12 +91,15 @@ while cap.isOpened():
     if campter_frame:
         images_list.append(frame)
         save_mask_list.append(wanted_mask)
+        box_list.append({'x': x, 'y':y, 'x_w':w, 'y_h':h})
         
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
 mask_list.append(wanted_mask)
+images_list.append(frame)
 save_mask_list.append(wanted_mask)
+box_list.append({'x': x, 'y':y, 'x_w':w, 'y_h':h})
 np.save('mask_output_total.npy', np.array(mask_list))
 np.save('output/mask_output.npy', np.array(save_mask_list))
 for idx in range(len(images_list)):
@@ -97,3 +111,26 @@ for idx in range(len(images_list)):
 cap.release()
 out.release()
 cv2.destroyAllWindows()
+
+# get max w,h
+max_x_w = np.max([box['x_w'] for box in box_list])
+max_y_h = np.max([box['y_h'] for box in box_list])
+image_list_small = []
+
+image_shape = images_list[0].shape[:2]
+
+for idx in range(len(save_mask_list)):
+    imag = images_list[idx]
+    mask = cv2.resize(save_mask_list[idx], (image_shape[1], image_shape[0]), interpolation=cv2.INTER_NEAREST).astype(np.uint8)
+    mask = np.stack([mask] * 3, axis=-1)
+    clear_image = imag*mask
+    
+    x, y = box_list[idx]['x'], box_list[idx]['y']
+    small_image = clear_image[y:y+max_y_h, x:x+max_x_w]
+    image_list_small.append(small_image)
+    
+for idx in range(len(image_list_small)):
+    if idx +1 >= 10:
+        cv2.imwrite(f'output/small/0{idx+1}.png', image_list_small[idx])
+    else:
+        cv2.imwrite(f'output/small/00{idx+1}.png', image_list_small[idx])
